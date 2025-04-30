@@ -1,12 +1,15 @@
 "use client"
 
 import type React from "react"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { CheckCircle, XCircle, Volume2, Sparkles } from "lucide-react"
+import { CheckCircle, XCircle, Volume2, Sparkles, Settings } from "lucide-react"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Slider } from "@/components/ui/slider"
 
 // Extensive word list combining various difficulty levels and subjects
 const wordList = [
@@ -177,6 +180,14 @@ const wordList = [
   },
 ]
 
+// Voice settings interface
+interface VoiceSettings {
+  voice: string
+  rate: number
+  pitch: number
+  volume: number
+}
+
 export default function SpellingBeeGame() {
   const [currentWordIndex, setCurrentWordIndex] = useState(0)
   const [userInput, setUserInput] = useState("")
@@ -186,11 +197,54 @@ export default function SpellingBeeGame() {
   const [shuffledWords, setShuffledWords] = useState([...wordList])
   const [totalWords, setTotalWords] = useState(10) // Default to 10 words per session
   const [gameWords, setGameWords] = useState<typeof wordList>([])
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([])
+  const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>({
+    voice: "",
+    rate: 0.9,
+    pitch: 1.0,
+    volume: 1.0,
+  })
+
+  const inputRef = useRef<HTMLInputElement>(null)
 
   // Initialize game with random selection of words
   useEffect(() => {
     startNewGame()
+
+    // Initialize speech synthesis and get available voices
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      // Get initial list of voices
+      const voices = window.speechSynthesis.getVoices()
+      setAvailableVoices(voices)
+
+      // Set up event for when voices change/load
+      window.speechSynthesis.onvoiceschanged = () => {
+        const updatedVoices = window.speechSynthesis.getVoices()
+        setAvailableVoices(updatedVoices)
+
+        // Set a default voice (preferably a clear English voice)
+        const defaultVoice = updatedVoices.find(
+          (voice) =>
+            (voice.lang.includes("en-US") && voice.name.includes("Google")) ||
+            voice.name.includes("Samantha") ||
+            voice.name.includes("Daniel"),
+        )
+
+        if (defaultVoice) {
+          setVoiceSettings((prev) => ({ ...prev, voice: defaultVoice.name }))
+        } else if (updatedVoices.length > 0) {
+          setVoiceSettings((prev) => ({ ...prev, voice: updatedVoices[0].name }))
+        }
+      }
+    }
   }, [])
+
+  // Focus input when game starts or moves to next word
+  useEffect(() => {
+    if (!isChecked && inputRef.current) {
+      inputRef.current.focus()
+    }
+  }, [currentWordIndex, isChecked])
 
   // Start a new game with random words
   const startNewGame = () => {
@@ -213,8 +267,22 @@ export default function SpellingBeeGame() {
 
   const speakWord = () => {
     if (typeof window !== "undefined" && window.speechSynthesis && currentWord) {
+      // Cancel any ongoing speech
+      window.speechSynthesis.cancel()
+
       const utterance = new SpeechSynthesisUtterance(currentWord.word)
-      utterance.rate = 0.9 // Slightly slower than default
+
+      // Apply voice settings
+      if (voiceSettings.voice) {
+        const selectedVoice = availableVoices.find((v) => v.name === voiceSettings.voice)
+        if (selectedVoice) utterance.voice = selectedVoice
+      }
+
+      utterance.rate = voiceSettings.rate
+      utterance.pitch = voiceSettings.pitch
+      utterance.volume = voiceSettings.volume
+
+      // Just say the whole word normally
       window.speechSynthesis.speak(utterance)
     }
   }
@@ -268,6 +336,26 @@ export default function SpellingBeeGame() {
     }
   }
 
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Enter key to submit/next
+      if (e.key === "Enter" && document.activeElement === inputRef.current) {
+        e.preventDefault()
+        handleSubmit(new Event("submit") as unknown as React.FormEvent)
+      }
+
+      // Space key to hear the word (when not typing)
+      if (e.key === " " && document.activeElement !== inputRef.current) {
+        e.preventDefault()
+        speakWord()
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [isChecked, userInput, currentWord])
+
   return (
     <Card className="w-full border-amber-200 bg-white shadow-lg overflow-hidden">
       <div className="bg-amber-400 h-2"></div>
@@ -279,9 +367,76 @@ export default function SpellingBeeGame() {
               Word {currentWordIndex + 1} of {totalWords}
             </CardDescription>
           </div>
-          <div className="bg-amber-100 px-3 py-1 rounded-full border border-amber-200 flex items-center gap-1">
-            <Sparkles className="h-4 w-4 text-amber-600" />
-            <span className="font-medium text-amber-900">Score: {score}</span>
+          <div className="flex items-center gap-2">
+            <div className="bg-amber-100 px-3 py-1 rounded-full border border-amber-200 flex items-center gap-1">
+              <Sparkles className="h-4 w-4 text-amber-600" />
+              <span className="font-medium text-amber-900">Score: {score}</span>
+            </div>
+
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" size="icon" className="h-8 w-8 rounded-full bg-white border-amber-200">
+                  <Settings className="h-4 w-4 text-amber-700" />
+                  <span className="sr-only">Voice settings</span>
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-80">
+                <div className="space-y-4">
+                  <h4 className="font-medium text-sm">Voice Settings</h4>
+
+                  <div className="space-y-2">
+                    <label className="text-sm text-muted-foreground">Voice</label>
+                    <Select
+                      value={voiceSettings.voice}
+                      onValueChange={(value) => setVoiceSettings({ ...voiceSettings, voice: value })}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select voice" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableVoices.map((voice) => (
+                          <SelectItem key={voice.name} value={voice.name}>
+                            {voice.name} ({voice.lang})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between">
+                      <label className="text-sm text-muted-foreground">Speed</label>
+                      <span className="text-sm text-muted-foreground">{voiceSettings.rate.toFixed(1)}x</span>
+                    </div>
+                    <Slider
+                      min={0.5}
+                      max={1.5}
+                      step={0.1}
+                      value={[voiceSettings.rate]}
+                      onValueChange={(value) => setVoiceSettings({ ...voiceSettings, rate: value[0] })}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between">
+                      <label className="text-sm text-muted-foreground">Pitch</label>
+                      <span className="text-sm text-muted-foreground">{voiceSettings.pitch.toFixed(1)}</span>
+                    </div>
+                    <Slider
+                      min={0.5}
+                      max={1.5}
+                      step={0.1}
+                      value={[voiceSettings.pitch]}
+                      onValueChange={(value) => setVoiceSettings({ ...voiceSettings, pitch: value[0] })}
+                    />
+                  </div>
+
+                  <Button size="sm" className="w-full bg-amber-500 hover:bg-amber-600 text-white" onClick={speakWord}>
+                    Test Voice
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
       </CardHeader>
@@ -331,6 +486,7 @@ export default function SpellingBeeGame() {
               </label>
               <Input
                 id="spelling-input"
+                ref={inputRef}
                 value={userInput}
                 onChange={(e) => setUserInput(e.target.value)}
                 placeholder="Type the word here..."
